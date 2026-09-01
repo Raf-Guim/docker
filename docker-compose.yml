@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend-nest:
+    build: ./backend-nest
+    restart: unless-stopped
+    # Regenerate the Prisma client on every start so it always matches
+    # the schema you're editing on the host, then start Nest in watch mode.
+    command: sh -c "npx prisma generate && npm run start:dev"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+    volumes:
+      - ./backend-nest:/app
+      - nest_node_modules:/app/node_modules
+    ports:
+      - "${NEST_PORT}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend-fastapi:
+    build: ./backend-fastapi
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    volumes:
+      - ./backend-fastapi:/app
+    ports:
+      - "${FASTAPI_PORT}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      NEST_API_URL: http://backend-nest:3000
+      FASTAPI_URL: http://backend-fastapi:8000
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next_cache:/app/.next
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    depends_on:
+      - backend-nest
+      - backend-fastapi
+
+volumes:
+  postgres_data:
+  nest_node_modules:
+  frontend_node_modules:
+  frontend_next_cache:

@@ -1,0 +1,36 @@
+# ---- deps: install dependencies ----
+FROM node:20-slim AS deps
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+
+# ---- builder: compile the app ----
+FROM node:20-slim AS builder
+WORKDIR /app
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+# Drop devDependencies (@nestjs/cli, typescript) now that dist/ is built.
+RUN npm prune --production
+
+# ---- runner: minimal runtime image ----
+FROM node:20-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+
+# Prisma's query engine needs OpenSSL, which isn't preinstalled on this base image.
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system --gid 1001 nestjs \
+    && adduser --system --uid 1001 nestjs
+
+COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
+COPY --chown=nestjs:nodejs package*.json ./
+
+USER nestjs
+EXPOSE 3000
+
+CMD ["node", "dist/main.js"]
